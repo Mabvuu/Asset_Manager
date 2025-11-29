@@ -2,33 +2,39 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { getUserRole } from "@/lib/getRole";
 import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
   const router = useRouter();
-  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null);
 
   useEffect(() => {
-    const getUser = async () => {
+    const load = async () => {
       const { data } = await supabase.auth.getUser();
-      if (!data.user) router.push("/login");
-      else setUser(data.user);
+      if (!data.user) return router.push("/login");
+
+      const r = await getUserRole();
+      setRole(r);
     };
-    getUser();
+
+    load();
   }, );
 
-  const logout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
+  if (!role) return null;
 
   return (
     <div className="p-8">
       <h1 className="text-2xl font-bold">Dashboard</h1>
-      <p>{user?.email}</p>
+
+      {role === "admin" && <p>ADMIN PANEL</p>}
+      {role === "user" && <p>USER PANEL</p>}
 
       <button
-        onClick={logout}
+        onClick={async () => {
+          await supabase.auth.signOut();
+          router.push("/login");
+        }}
         className="mt-4 bg-red-500 text-white p-2"
       >
         Logout
