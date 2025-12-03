@@ -1,6 +1,6 @@
 // src/app/login/page.jsx
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 
@@ -10,28 +10,81 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (data?.session) router.replace('/dashboard');
+      else setCheckingSession(false);
+    })();
+
+    const { subscription } = supabase.auth.onAuthStateChange((_evt, state) => {
+      if (state?.session) router.replace('/dashboard');
+    });
+
+    return () => subscription?.unsubscribe();
+  }, [router]);
+
+  if (checkingSession) return null;
+
+  function validEmail(v) {
+    return /\S+@\S+\.\S+/.test(v);
+  }
+
+  // New handleLogin: if already signed-in -> go to dashboard.
+  // Otherwise send magic link (redirect back to /login so the page can verify session).
   async function handleLogin(e) {
     e.preventDefault();
-    setLoading(true);
     setErrorMsg('');
+    setLoading(true);
+
     try {
-      const { error } = await supabase.auth.signInWithOtp({ email });
-      setLoading(false);
-      if (error) {
-        setErrorMsg(error.message);
+      // 1) If already have a session, skip sending email and go to dashboard
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData?.session) {
+        setLoading(false);
+        router.replace('/dashboard');
         return;
       }
-      // show modal instructing user to check email
+
+      // 2) Not signed-in -> validate email then send magic link
+      if (!validEmail(email)) {
+        setLoading(false);
+        setErrorMsg('Please enter a valid email address.');
+        return;
+      }
+
+      // ensure Supabase redirects back to the login page after clicking the magic link
+     const redirect = `${window.location.origin}/dashboard`;
+
+
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirect },
+      });
+
+      setLoading(false);
+
+      if (error) {
+        setErrorMsg(error.message || 'Failed to send magic link.');
+        return;
+      }
+
+      // show modal instructing user to check their email
       setShowModal(true);
     } catch (err) {
       setLoading(false);
-      setErrorMsg(err?.message || 'Something went wrong');
+      setErrorMsg(err?.message || 'Something went wrong.');
     }
   }
 
-  // Called when user says "I clicked the link" — checks session and redirects if present
+  // Called by "I clicked the link — continue" button in the modal.
+  // Checks session; if Supabase established it, send the user to dashboard.
   async function handleContinueAfterEmail() {
+    setErrorMsg('');
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.getSession();
@@ -40,13 +93,8 @@ export default function LoginPage() {
         setErrorMsg(error.message);
         return;
       }
-      if (data?.session) {
-        // user already authenticated — send them to the appropriate page
-        router.push('/dashboard');
-      } else {
-        // no session yet — keep modal open and tell them to check email
-        setErrorMsg('No active session yet. Please click the link in your email and then press continue.');
-      }
+      if (data?.session) router.replace('/dashboard');
+      else setErrorMsg('No active session yet. Click the link in your email and then press continue.');
     } catch (err) {
       setLoading(false);
       setErrorMsg(err?.message || 'Failed to check session');
@@ -54,65 +102,86 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="max-w-md mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Login</h1>
+    <div className="login-root">
+      <div className="login-card">
+        <div className="mb-6 text-center">
+          <div className="login-brand mb-3">AM</div>
+          <h1 className="login-title">Welcome back</h1>
+          <p className="login-sub">Sign in with your email to continue</p>
+        </div>
 
-      <form onSubmit={handleLogin} className="space-y-4">
-        <label className="block">
-          <span className="text-sm">Email</span>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 block w-full rounded border px-3 py-2"
-            placeholder="you@company.com"
-          />
-        </label>
+        <form onSubmit={handleLogin} className="space-y-4">
+          <label className="block">
+            <span className="text-sm text-slate-600">Work email</span>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="input mt-2"
+              placeholder="you@company.com"
+            />
+          </label>
 
-        {errorMsg && <p className="text-red-600">{errorMsg}</p>}
+          {errorMsg && <div className="text-sm" style={{ color: '#dc2626' }}>{errorMsg}</div>}
 
-        <button
-          type="submit"
-          className="px-4 py-2 rounded bg-blue-600 text-white"
-          disabled={loading}
-        >
-          {loading ? 'Sending...' : 'Send magic link'}
-        </button>
-      </form>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary"
+              style={{ flex: 1 }}
+            >
+              {loading ? 'Working…' : 'Send magic link'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setEmail(''); setErrorMsg(''); }}
+              className="btn-secondary"
+              style={{ width: 120 }}
+            >
+              Clear
+            </button>
+          </div>
+        </form>
+
+        <div className="mt-5 center text-muted">
+          <span>Need an invite? </span>
+          <a href="/invite" style={{ color: 'var(--accent-600)', fontWeight: 700 }}>Request one</a>
+        </div>
+      </div>
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg bg-white rounded shadow-lg p-6">
+        <div className="fixed inset-0 z-90 flex items-center justify-center" style={{ background: 'rgba(244, 234, 234, 0.45)', padding: 16 }}>
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-lg p-6">
             <h2 className="text-xl font-semibold mb-2">Check your email</h2>
             <p className="mb-4">
-              We sent a magic link to <strong>{email}</strong>. Click the link in your email to sign in.
-              If this is a new account, confirm the email to finish setup.
+              We sent a magic link to <strong>{email}</strong>. Open the email and click the link to sign in.
             </p>
 
-            <div className="flex gap-3">
+            <div style={{ display: 'flex', gap: 12 }}>
               <button
                 onClick={handleContinueAfterEmail}
-                className="px-4 py-2 rounded bg-green-600 text-white"
+                className="btn-primary"
+                style={{ flex: 1 }}
                 disabled={loading}
               >
                 {loading ? 'Checking…' : 'I clicked the link — continue'}
               </button>
 
               <button
-                onClick={() => {
-                  setShowModal(false);
-                }}
-                className="px-4 py-2 rounded border"
+                onClick={() => setShowModal(false)}
+                className="btn-secondary"
+                style={{ width: 120 }}
               >
                 Close
               </button>
             </div>
 
-            <p className="mt-4 text-sm text-gray-600">
-              Didn't receive the email? Check spam or try again. If you are expecting to be redirected
-              immediately (returning user), press "I clicked the link — continue" after clicking the link.
+            <p className="mt-4 text-muted">
+              Didn't receive the email? Check your spam folder or try again.
             </p>
           </div>
         </div>
